@@ -4,9 +4,17 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const frontmatter_mod = b.addModule("frontmatter", .{
-        .root_source_file = b.path("src/root.zig"),
+    const yaml = b.dependency("yaml", .{
         .target = target,
+        .optimize = optimize,
+    });
+
+    const frontmatter_mod = b.addModule("frontmatter", .{
+        .root_source_file = b.path("src/frontmatter.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "yaml", .module = yaml.module("yaml") },
+        },
     });
 
     const exe = b.addExecutable(.{

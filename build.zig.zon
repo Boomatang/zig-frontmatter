@@ -3,6 +3,15 @@
     .version = "0.0.0",
     .fingerprint = 0x7eda8a3a57ce01a0, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{},
+    .dependencies = .{
+        // .yaml = .{
+        //     .url = "https://github.com/kubkon/zig-yaml/archive/refs/tags/0.2.0.tar.gz",
+        //     .hash = "zig_yaml-0.2.0-C1161pmrAgC_rL9WzjvgNg7HnmyAMwHsG3Sre0F4haPI",
+        // },
+        .yaml = .{
+            .url = "https://github.com/Stuff7/zig-yaml/archive/refs/heads/zig-0.16.tar.gz",
+            .hash = "zig_yaml-0.3.0-C1161gmsAgBMXfMGSbvs1jaocmD2KVCEZRPKBSO0x1Hc",
+        },
+    },
     .paths = .{"*"},
 }
