@@ -1,0 +1,8 @@
+.{
+    .name = .frontmatter,
+    .version = "0.0.0",
+    .fingerprint = 0x7eda8a3a57ce01a0, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{"*"},
+}
