@@ -1,0 +1,27 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v5.0.0
+  hooks:
+  - id: check-toml
+  - id: detect-private-key
+  - id: check-merge-conflict
+  - id: check-added-large-files
+  - id: check-yaml
+  - id: no-commit-to-branch
+    args:
+      - --branch=main
+  - id: debug-statements
+- repo: local
+  hooks:
+  - id: zig-build-test
+    name: Zig build test
+    entry: zig build test
+    language: system
+    pass_filenames: false
+  - id: zig-fmt
+    name: Zig fmt
+    entry: zig fmt .
+    language: system
+    pass_filenames: false
