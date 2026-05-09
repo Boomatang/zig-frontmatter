@@ -1,3 +1,29 @@
+//! Frontmatter parser for Zig.
+//!
+//! This library parses frontmatter (YAML metadata) from the beginning of text files.
+//! Frontmatter is commonly used in static site generators and documentation tools.
+//!
+//! ## Quick Example
+//! ```zig
+//! const Metadata = struct { title: []const u8, author: []const u8 };
+//! const input = "---\ntitle: My Post\nauthor: John\n---\nContent here";
+//!
+//! var result = try frontmatter.load(allocator, Metadata, input);
+//! defer result.deinit(allocator);
+//!
+//! std.debug.print("Title: {s}\n", .{result.metadata.title});
+//! ```
+//!
+//! ## Examples
+//! For complete runnable examples, build and run:
+//! ```
+//! zig build examples
+//! ./zig-out/examples/basic
+//! ./zig-out/examples/custom_metadata
+//! ./zig-out/examples/extra_fields
+//! ./zig-out/examples/error_handling
+//! ```
+
 const std = @import("std");
 const types = @import("types.zig");
 const yaml = @import("yaml");
@@ -75,7 +101,7 @@ const Metadata = struct {
     name: []const u8,
     namespace: []const u8,
 };
-test "load data successfully" {
+test "load_with_metadata" {
     const sample =
         \\---
         \\name: test-issue
@@ -96,7 +122,7 @@ test "load data successfully" {
     try expectEqualStrings(sample, data);
 }
 
-test "load data no frontmatter" {
+test "error_no_frontmatter" {
     const allocator = std.testing.allocator;
     const simple =
         \\Hello world
@@ -218,7 +244,7 @@ test "load missing name field" {
     try expectError(error.InvalidYaml, load(arena.allocator(), Metadata, sample));
 }
 
-test "load with extra fields" {
+test "load_with_extra_fields" {
     // Extra fields not in Metadata struct should cause an error
     const sample =
         \\---
@@ -309,4 +335,44 @@ test "load with special characters in values" {
     defer result.deinit(arena.allocator());
     try expectEqualStrings("value:with:colons", result.metadata.name);
     try expectEqualStrings("my-project", result.metadata.namespace);
+}
+
+test "load nested metadata struct" {
+    const About = struct {
+        help: []const u8,
+        time: u8,
+    };
+
+    const Data = struct {
+        about: About,
+        name: []const u8,
+    };
+
+    const sample =
+        \\---
+        \\name: my name
+        \\about:
+        \\  help: Some data
+        \\  time: 3
+        \\date: some theing
+        \\---
+        \\body
+    ;
+    const expected =
+        \\---
+        \\name: my name
+        \\about:
+        \\  help: Some data
+        \\  time: 3
+        \\date: some theing
+        \\---
+        \\body
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var result = try load(arena.allocator(), Data, sample);
+    defer result.deinit(arena.allocator());
+
+    const data = try result.toString(arena.allocator());
+    try expectEqualStrings(expected, data);
 }

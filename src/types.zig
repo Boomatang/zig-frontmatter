@@ -18,41 +18,70 @@ pub fn Result(comptime M: type) type {
 
         /// Converts the result back to frontmatter format with metadata and data
         pub fn toString(self: @This(), allocator: std.mem.Allocator) ![]const u8 {
-            var list = std.ArrayList(u8){};
-            errdefer list.deinit(allocator);
+            var buffer: std.ArrayList(u8) = .empty;
+            errdefer buffer.deinit(allocator);
 
-            var writer = list.writer(allocator);
-            try writer.writeAll("---\n");
-            try toYaml(self.metadata, writer, 0);
+            // Opening delimiter
+            try buffer.appendSlice(allocator, "---\n");
+
+            // Preserve original YAML order by iterating through raw map
+            // But use metadata struct values (which may have been modified)
             const meta_info = @typeInfo(M).@"struct";
             for (self.raw.keys(), self.raw.values()) |key, value| {
+                // Check if this key exists in metadata struct
                 var is_meta = false;
                 inline for (meta_info.fields) |field| {
                     if (std.mem.eql(u8, key, field.name)) {
                         is_meta = true;
+                        // Output the (potentially modified) struct value
+                        const field_value = @field(self.metadata, field.name);
+                        const field_info = @typeInfo(field.type);
+
+                        if (field_info == .@"struct") {
+                            // Nested struct
+                            const key_line = try std.fmt.allocPrint(allocator, "{s}:\n", .{field.name});
+                            defer allocator.free(key_line);
+                            try buffer.appendSlice(allocator, key_line);
+                            try appendMetadataStruct(allocator, &buffer, field_value, 2);
+                        } else {
+                            // Simple value
+                            try appendMetadataValue(allocator, &buffer, field.name, field_value);
+                            try buffer.append(allocator, '\n');
+                        }
                         break;
                     }
                 }
-                if (is_meta) continue;
-                const is_compound = value == .map or value == .list;
-                if (is_compound) {
-                    try writer.print("{s}:\n", .{key});
-                    try writeRawValue(writer, value, 2);
-                } else {
-                    try writer.print("{s}: ", .{key});
-                    try writeRawValue(writer, value, 0);
-                }
-                try writer.writeByte('\n');
-            }
-            try writer.writeAll("---\n");
-            try writer.writeAll(self.data);
 
-            return try list.toOwnedSlice(allocator);
+                // If not in metadata struct, use raw YAML value (extra field)
+                if (!is_meta) {
+                    const is_compound = value == .map or value == .list;
+                    if (is_compound) {
+                        const key_line = try std.fmt.allocPrint(allocator, "{s}:\n", .{key});
+                        defer allocator.free(key_line);
+                        try buffer.appendSlice(allocator, key_line);
+                        try appendRawValue(allocator, &buffer, value, 2);
+                    } else {
+                        const key_line = try std.fmt.allocPrint(allocator, "{s}: ", .{key});
+                        defer allocator.free(key_line);
+                        try buffer.appendSlice(allocator, key_line);
+                        try appendRawValue(allocator, &buffer, value, 0);
+                    }
+                    try buffer.append(allocator, '\n');
+                }
+            }
+
+            // Closing delimiter
+            try buffer.appendSlice(allocator, "---\n");
+
+            // Content
+            try buffer.appendSlice(allocator, self.data);
+
+            return try buffer.toOwnedSlice(allocator);
         }
     };
 }
 
-fn toYaml(value: anytype, writer: anytype, indent: usize) !void {
+fn appendMetadataStruct(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), value: anytype, indent: usize) !void {
     const T = @TypeOf(value);
     const info = @typeInfo(T);
 
@@ -62,103 +91,106 @@ fn toYaml(value: anytype, writer: anytype, indent: usize) !void {
                 const field_value = @field(value, field.name);
                 const field_info = @typeInfo(field.type);
 
-                try writeIndent(writer, indent);
+                // Indent
+                for (0..indent) |_| try buffer.append(allocator, ' ');
 
                 if (field_info == .@"struct") {
-                    try writer.print("{s}:\n", .{field.name});
-                    try toYaml(field_value, writer, indent + 2);
+                    const key_line = try std.fmt.allocPrint(allocator, "{s}: \n", .{field.name});
+                    defer allocator.free(key_line);
+                    try buffer.appendSlice(allocator, key_line);
+                    try appendMetadataStruct(allocator, buffer, field_value, indent + 2);
                 } else {
-                    try writer.print("{s}: ", .{field.name});
-                    try writeValue(field_value, writer);
-                    try writer.writeByte('\n');
+                    try appendMetadataValue(allocator, buffer, field.name, field_value);
+                    try buffer.append(allocator, '\n');
                 }
             }
         },
+        else => {},
+    }
+}
+
+fn appendMetadataValue(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), key: []const u8, value: anytype) !void {
+    const T = @TypeOf(value);
+    const info = @typeInfo(T);
+
+    const key_line = try std.fmt.allocPrint(allocator, "{s}: ", .{key});
+    defer allocator.free(key_line);
+    try buffer.appendSlice(allocator, key_line);
+
+    switch (info) {
+        .int, .comptime_int => {
+            const val_line = try std.fmt.allocPrint(allocator, "{d}", .{value});
+            defer allocator.free(val_line);
+            try buffer.appendSlice(allocator, val_line);
+        },
+        .float, .comptime_float => {
+            const val_line = try std.fmt.allocPrint(allocator, "{d}", .{value});
+            defer allocator.free(val_line);
+            try buffer.appendSlice(allocator, val_line);
+        },
+        .bool => {
+            try buffer.appendSlice(allocator, if (value) "true" else "false");
+        },
+        .pointer => |p| {
+            if (p.size == .slice and p.child == u8) {
+                try buffer.appendSlice(allocator, value);
+            } else {
+                const val_line = try std.fmt.allocPrint(allocator, "{any}", .{value});
+                defer allocator.free(val_line);
+                try buffer.appendSlice(allocator, val_line);
+            }
+        },
         else => {
-            try writeValue(value, writer);
-            try writer.writeByte('\n');
+            const val_line = try std.fmt.allocPrint(allocator, "{any}", .{value});
+            defer allocator.free(val_line);
+            try buffer.appendSlice(allocator, val_line);
         },
     }
 }
 
-fn writeIndent(writer: anytype, indent: usize) !void {
-    for (0..indent) |_| try writer.writeByte(' ');
-}
-
-fn writeRawValue(writer: anytype, value: yaml.Yaml.Value, indent: usize) !void {
+fn appendRawValue(allocator: std.mem.Allocator, buffer: *std.ArrayList(u8), value: yaml.Yaml.Value, indent: usize) !void {
     switch (value) {
         .empty => {},
-        .scalar => |s| try writer.print("{s}", .{s}),
-        .boolean => |b| try writer.writeAll(if (b) "true" else "false"),
+        .scalar => |s| try buffer.appendSlice(allocator, s),
+        .boolean => |b| try buffer.appendSlice(allocator, if (b) "true" else "false"),
         .list => |list| {
             for (list, 0..) |elem, i| {
-                try writeIndent(writer, indent);
-                try writer.writeAll("- ");
+                // Indent
+                for (0..indent) |_| try buffer.append(allocator, ' ');
+                try buffer.appendSlice(allocator, "- ");
+
                 const elem_compound = elem == .map or elem == .list;
                 if (elem_compound) {
-                    try writer.writeByte('\n');
-                    try writeRawValue(writer, elem, indent + 2);
+                    try buffer.append(allocator, '\n');
+                    try appendRawValue(allocator, buffer, elem, indent + 2);
                 } else {
-                    try writeRawValue(writer, elem, 0);
+                    try appendRawValue(allocator, buffer, elem, 0);
                 }
-                if (i < list.len - 1) try writer.writeByte('\n');
+                if (i < list.len - 1) try buffer.append(allocator, '\n');
             }
         },
         .map => |map| {
             const count = map.count();
             var idx: usize = 0;
             for (map.keys(), map.values()) |k, v| {
-                try writeIndent(writer, indent);
+                // Indent
+                for (0..indent) |_| try buffer.append(allocator, ' ');
+
                 const v_compound = v == .map or v == .list;
                 if (v_compound) {
-                    try writer.print("{s}:\n", .{k});
-                    try writeRawValue(writer, v, indent + 2);
+                    const key_line = try std.fmt.allocPrint(allocator, "{s}:\n", .{k});
+                    defer allocator.free(key_line);
+                    try buffer.appendSlice(allocator, key_line);
+                    try appendRawValue(allocator, buffer, v, indent + 2);
                 } else {
-                    try writer.print("{s}: ", .{k});
-                    try writeRawValue(writer, v, 0);
+                    const key_line = try std.fmt.allocPrint(allocator, "{s}: ", .{k});
+                    defer allocator.free(key_line);
+                    try buffer.appendSlice(allocator, key_line);
+                    try appendRawValue(allocator, buffer, v, 0);
                 }
                 idx += 1;
-                if (idx < count) try writer.writeByte('\n');
+                if (idx < count) try buffer.append(allocator, '\n');
             }
         },
-    }
-}
-
-fn writeValue(value: anytype, writer: anytype) !void {
-    const T = @TypeOf(value);
-    const info = @typeInfo(T);
-
-    switch (info) {
-        .int, .comptime_int => try writer.print("{d}", .{value}),
-        .float, .comptime_float => try writer.print("{d}", .{value}),
-        .bool => try writer.print("{}", .{value}),
-        .pointer => |p| {
-            if (p.size == .slice and p.child == u8) {
-                try writer.print("{s}", .{value});
-            } else {
-                try writer.print("{any}", .{value});
-            }
-        },
-        .optional => {
-            if (value) |v| {
-                try writeValue(v, writer);
-            } else {
-                try writer.writeAll("null");
-            }
-        },
-        .array => |a| {
-            if (a.child == u8) {
-                try writer.print("{s}", .{value});
-            } else {
-                try writer.writeAll("[");
-                for (value, 0..) |item, i| {
-                    if (i > 0) try writer.writeAll(", ");
-                    try writeValue(item, writer);
-                }
-                try writer.writeAll("]");
-            }
-        },
-        .@"enum" => try writer.writeAll(@tagName(value)),
-        else => try writer.print("{any}", .{value}),
     }
 }
